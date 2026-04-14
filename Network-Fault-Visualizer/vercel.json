@@ -1,0 +1,6 @@
+{
+  "outputDirectory": "artifacts/network-fault-visualizer/dist",
+  "framework": "vite",
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm run build"
+}
