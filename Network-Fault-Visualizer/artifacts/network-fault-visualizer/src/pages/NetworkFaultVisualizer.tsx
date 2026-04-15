@@ -1176,7 +1176,7 @@ export default function NetworkFaultVisualizer() {
   const overlayKindColor = overlay?.kind === "bfs" ? "#4da6ff" : overlay?.kind === "dfs" ? "#bf7fff" : "#ffd700";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#050810", overflow: "hidden", userSelect: "none", color: "#ffffff", fontFamily: "'DM Mono', monospace" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#050810", overflow: "hidden", userSelect: "none", color: "#ffffff", fontFamily: "'DM Mono', monospace" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500;600&display=swap');
         * { box-sizing: border-box; }
