@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   PlusCircle, Link2, Zap, Activity, GitBranch, Network,
-  ScanSearch, RotateCcw, RefreshCw, Trash2, ChevronRight, Play, Settings
+  ScanSearch, RotateCcw, RefreshCw, Trash2, ChevronRight, Play, Settings, SkipBack, SkipForward
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
@@ -90,6 +90,11 @@ interface Overlay {
   latency?: number;
 }
 
+type HistoryAction = 
+  | { type: "ADD_NODE", payload: GNode }
+  | { type: "ADD_EDGE", payload: GEdge }
+  | { type: "FAIL_NODE", payload: number };
+
 // â”€â”€â”€ BST helpers (pure) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function bstInsert(root: BSTNode | null, val: number): BSTNode {
   if (!root) return { val, left: null, right: null };
@@ -155,6 +160,10 @@ export default function NetworkFaultVisualizer() {
   const [overlayVisible, setOverlayVisible] = useState(false); // for fade-out animation
   const [animating, setAnimating] = useState(false);
   const animatingRef = useRef(false);
+
+  // History state
+  const [history, setHistory] = useState<HistoryAction[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
   // Form inputs
   const [routerIn, setRouterIn] = useState("");
@@ -283,6 +292,44 @@ export default function NetworkFaultVisualizer() {
     const ns = nodesRef.current;
     const es = edgesRef.current;
 
+    // --- Dark shadow blobs behind active graph elements to mask the grid ---
+    if (ns.length > 0) {
+      ctx.save();
+      // Thicken black path behind edges for latency label visibility
+      for (const e of es) {
+        const fn = ns.find((n: GNode) => n.id === e.from);
+        const tn = ns.find((n: GNode) => n.id === e.to);
+        if (!fn || !tn) continue;
+        ctx.beginPath();
+        ctx.moveTo(fn.x, fn.y);
+        ctx.lineTo(tn.x, tn.y);
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.lineWidth = 80;
+        ctx.lineCap = "round";
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(fn.x, fn.y);
+        ctx.lineTo(tn.x, tn.y);
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+        ctx.lineWidth = 40;
+        ctx.stroke();
+      }
+
+      // Dark radial gradients behind nodes
+      for (const n of ns) {
+        const bgGrad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, 160);
+        bgGrad.addColorStop(0, "rgba(0, 0, 0, 1)");
+        bgGrad.addColorStop(0.4, "rgba(0, 0, 0, 0.95)");
+        bgGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = bgGrad;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 160, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // Empty state: Animated Radar
     if (ns.length === 0) {
       ctx.save();
@@ -405,13 +452,13 @@ export default function NetworkFaultVisualizer() {
       const mx = (sx + ex) / 2, my = (sy + ey) / 2;
       ctx.translate(mx, my);
       ctx.rotate(ang);
-      ctx.fillStyle = "rgba(10, 14, 26, 0.8)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.95)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
       ctx.beginPath();
-      ctx.roundRect(-20, -18, 40, 14, 4);
+      ctx.roundRect(-24, -19, 48, 16, 6);
       ctx.fill(); ctx.stroke();
-      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
-      ctx.font = "500 10px 'DM Mono', monospace";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.font = "600 10px 'DM Mono', monospace";
       ctx.textAlign = "center";
       ctx.fillText(`${e.weight}ms`, 0, -8);
       ctx.restore();
@@ -625,6 +672,51 @@ export default function NetworkFaultVisualizer() {
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, []);
 
+  // â”€â”€ History management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const pushHistory = useCallback((action: HistoryAction) => {
+    setHistoryIndex((prevIndex) => {
+      setHistory((prev) => {
+        const newHistory = prev.slice(0, prevIndex + 1);
+        newHistory.push(action);
+        return newHistory;
+      });
+      return prevIndex + 1;
+    });
+  }, []);
+
+  const rebuildGraph = useCallback((upToIndex: number, currentHistory: HistoryAction[]) => {
+    const newNodes: GNode[] = [];
+    const newEdges: GEdge[] = [];
+
+    for (let i = 0; i <= upToIndex; i++) {
+      const action = currentHistory[i];
+      if (action.type === "ADD_NODE") {
+        newNodes.push({ ...action.payload });
+      } else if (action.type === "ADD_EDGE") {
+        newEdges.push({ ...action.payload });
+      } else if (action.type === "FAIL_NODE") {
+        const id = action.payload;
+        const node = newNodes.find((n) => n.id === id);
+        if (node) {
+          node.active = false;
+          node.state = "failed";
+        }
+        for (const e of newEdges) {
+          if (e.from === id || e.to === id) {
+            e.state = "failed";
+          }
+        }
+      }
+    }
+
+    nodesRef.current = newNodes;
+    edgesRef.current = newEdges;
+
+    const activeIds = newNodes.filter((n) => n.active).map((n) => n.id);
+    setBstRoot(buildBalancedBST(activeIds));
+    setRenderTick((t) => t + 1);
+  }, []);
+
   // â”€â”€ Build adjacency map (only active nodes & edges) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const buildAdj = React.useCallback((nodes: GNode[], edges: GEdge[]) => {
     const adj = new Map<number, { to: number; weight: number; eid: string }[]>();
@@ -693,13 +785,14 @@ export default function NetworkFaultVisualizer() {
       vx: 0, vy: 0,
       state: "active", active: true,
     };
+    pushHistory({ type: "ADD_NODE", payload: { ...newNode } });
     nodesRef.current = [...nodesRef.current, newNode];
     const activeIds = nodesRef.current.filter((n: GNode) => n.active).map((n: GNode) => n.id);
     setBstRoot(buildBalancedBST(activeIds));
     setRenderTick((t: number) => t + 1);
     addLog("BUILD", `>> Router ${id} added to network.`);
     setRouterIn("");
-  }, [routerIn, addLog, err]);
+  }, [routerIn, addLog, err, pushHistory]);
 
   const addEdge = React.useCallback(() => {
     const from = parseInt(eFrom.trim()), to = parseInt(eTo.trim()), w = parseInt(eLatency.trim());
@@ -711,11 +804,12 @@ export default function NetworkFaultVisualizer() {
     if (edgesRef.current.find((e: GEdge) => e.id === eid)) { err("edge", `Link ${from}→${to} already exists`); return; }
 
     const newEdge: GEdge = { id: eid, from, to, weight: w, bidirectional: eBidi, state: "normal" };
+    pushHistory({ type: "ADD_EDGE", payload: { ...newEdge } });
     edgesRef.current = [...edgesRef.current, newEdge];
     setRenderTick((t: number) => t + 1);
     addLog("BUILD", `>> Link added: Router ${from} ${eBidi ? "↔" : "→"} Router ${to} (Latency: ${w}ms, ${eBidi ? "Two-way" : "One-way"})`);
     setEFrom(""); setETo(""); setELatency("");
-  }, [eFrom, eTo, eLatency, eBidi, addLog, err]);
+  }, [eFrom, eTo, eLatency, eBidi, addLog, err, pushHistory]);
 
   const failRouter = React.useCallback(() => {
     const id = parseInt(faultIn.trim());
@@ -724,6 +818,7 @@ export default function NetworkFaultVisualizer() {
     if (!node) { err("fault", `Router ${id} not found`); return; }
     if (!node.active) { err("fault", `Router ${id} is already down`); return; }
 
+    pushHistory({ type: "FAIL_NODE", payload: id });
     nodesRef.current = nodesRef.current.map((n: GNode) =>
       n.id === id ? { ...n, active: false, state: "failed" } : n
     );
@@ -737,7 +832,7 @@ export default function NetworkFaultVisualizer() {
     setRenderTick((t: number) => t + 1);
     addLog("FAULT", `>> Router ${id} has FAILED and is removed from network.`);
     setFaultIn("");
-  }, [faultIn, addLog, err]);
+  }, [faultIn, addLog, err, pushHistory]);
 
   // BFS
   const runBFS = React.useCallback(() => {
@@ -973,9 +1068,28 @@ export default function NetworkFaultVisualizer() {
     setOverlay(null);
     setOverlayVisible(false);
     setCanReplay(false);
+    setHistoryIndex(-1);
     setRenderTick(t => t + 1);
-    addLog("SYSTEM", ">> Network reset initiated. All data purged.");
+    addLog("SYSTEM", ">> Network visually reset. History preserved for playback.");
   }, [addLog]);
+
+  const stepBackward = useCallback(() => {
+    if (historyIndex >= 0) {
+      const nextIndex = historyIndex - 1;
+      setHistoryIndex(nextIndex);
+      rebuildGraph(nextIndex, history);
+      addLog("SYSTEM", ">> Stepped backward in history.");
+    }
+  }, [historyIndex, history, rebuildGraph, addLog]);
+
+  const stepForward = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const nextIndex = historyIndex + 1;
+      setHistoryIndex(nextIndex);
+      rebuildGraph(nextIndex, history);
+      addLog("SYSTEM", ">> Stepped forward in history.");
+    }
+  }, [historyIndex, history, rebuildGraph, addLog]);
 
   const handleReplay = useCallback(() => {
     if (replayRef.current && !animating) {
@@ -1141,10 +1255,11 @@ export default function NetworkFaultVisualizer() {
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
         <aside style={{ 
-          width: 360, flexShrink: 0, overflowY: "auto", 
+          width: sideW, flexShrink: 0, overflowY: "auto", 
           background: "rgba(10, 14, 26, 0.7)", backdropFilter: "blur(24px)",
           borderRight: "1px solid rgba(0, 212, 255, 0.12)",
-          padding: "12px 0"
+          padding: "12px 0",
+          userSelect: sideResizing.current ? "none" : "auto"
         }}>
           <div className="glass-card">
             <CardHeader title="Add Router" icon={PlusCircle} color="#00d4ff" />
@@ -1245,6 +1360,13 @@ export default function NetworkFaultVisualizer() {
           </div>
         </aside>
 
+        <div
+          style={{ width: 5, background: "transparent", cursor: "col-resize", flexShrink: 0, zIndex: 10, transition: "background 0.1s" }}
+          onMouseDown={(e: React.MouseEvent) => { sideResizing.current = true; resizeStart.current = { x: e.clientX, y: e.clientY, val: sideW }; }}
+          onMouseEnter={(e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "rgba(0,212,255,0.18)")}
+          onMouseLeave={(e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = "transparent")}
+        />
+
         <main style={{ flex: 1, position: "relative", background: "#050810", overflow: "hidden" }}>
           <AnimatedGridPattern
             numSquares={100}
@@ -1328,6 +1450,12 @@ export default function NetworkFaultVisualizer() {
 
           <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 60 }}>
             <Dock iconSize={40} iconMagnification={54} iconDistance={100} className="bg-black/60 border-white/5 backdrop-blur-xl">
+              <DockIcon onClick={stepBackward} className={cn("bg-white/5 transition-colors", historyIndex >= 0 ? "hover:bg-white/10" : "opacity-50 cursor-not-allowed")}>
+                <SkipBack size={20} className="text-white/60" />
+              </DockIcon>
+              <DockIcon onClick={stepForward} className={cn("bg-white/5 transition-colors", historyIndex < history.length - 1 ? "hover:bg-white/10" : "opacity-50 cursor-not-allowed")}>
+                <SkipForward size={20} className="text-white/60" />
+              </DockIcon>
               <DockIcon onClick={clearHighlights} className="bg-white/5 hover:bg-white/10 transition-colors">
                 <Trash2 size={20} className="text-white/60" />
               </DockIcon>
