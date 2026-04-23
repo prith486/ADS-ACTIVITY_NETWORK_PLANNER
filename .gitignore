@@ -1,1 +1,8 @@
 *.md
+.vercel
+.env*.local
+
+# Replit metadata
+.replit
+.replitignore
+.replit-artifact/
