@@ -4,20 +4,20 @@
 
 using namespace std;
 
-// GLOBALS
+
 const int MAXN = 105;
 int N = 0;
 
-// adj[u] = list of {neighbor, weight}
+
 vector<pair<int, int>> adj[MAXN];
 bool activeRouter[MAXN];
 
-// DFS globals
+
 bool dfsVisited[MAXN];
 vector<int> currentPath;
-vector<pair<vector<int>, int>> allPaths; // {path, latency}
+vector<pair<vector<int>, int>> allPaths; 
 
-// BST
+
 struct BSTNode {
     int id;
     BSTNode* left;
@@ -26,7 +26,7 @@ struct BSTNode {
 };
 BSTNode* bstRoot = nullptr;
 
-// Helpers
+
 bool validRouter(int id) {
     return id >= 1 && id <= N;
 }
@@ -209,7 +209,6 @@ void startDFS(int src, int dest) {
     cout << "Total paths found: " << allPaths.size() << endl;
 }
 
-// 🔥 Manual Sort (Bubble Sort)
 void sortPathsByLatency() {
     int n = allPaths.size();
     for (int i = 0; i < n - 1; i++) {
@@ -246,7 +245,6 @@ void recoveryPlan(int src, int dest) {
     cout << " (Latency: " << allPaths[0].second << "ms)" << endl;
 }
 
-// MAIN
 int main() {
     int choice;
 
